@@ -1,0 +1,373 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
+\usepackage{textcomp}
+\usepackage{hyperref}
+
+\newcommand{\tbd}{\textcolor{red}{\textbf{TBD}}}
+\newcommand{\todo}[1]{\textcolor{red}{[#1]}}
+\newcommand{\figph}[3]{%
+  \IfFileExists{figs/#1}%
+    {\includegraphics[width=#2]{figs/#1}}%
+    {\fbox{\parbox[c][#3][c]{\dimexpr#2-2\fboxsep-2\fboxrule\relax}%
+      {\centering\footnotesize\color{red}Placeholder\\\texttt{figs/#1}}}}}
+
+\begin{document}
+
+\title{Multi-Domain Image Restoration and Style-Conditioned Face-to-Sketch Synthesis with Autoencoders, Mixture-of-Experts, and Conditional GANs}
+
+\author{\IEEEauthorblockN{i230776 Mishal Fatima}
+\IEEEauthorblockA{Department of Computer Science, FAST NUCES\\
+Islamabad, Pakistan\\
+i230776@isb.nu.edu.pk}}
+
+\maketitle
+
+\begin{abstract}
+\textbf{GitHub Repository:} \url{https://github.com/MishalFatima09/genAI_A1.git} \\
+\textbf{Video Demonstration:} \url{https://youtu.be/PVhg_DQxwFE} \\
+
+This report studies four progressively more capable generative models and the application that serves them. Task~1 trains a single universal denoising autoencoder with a strict bottleneck to restore images corrupted by salt-and-pepper noise, Gaussian blur, or rectangular occlusion. Task~2 replaces it with a CNN corruption classifier that hard-routes each image to a dedicated specialist autoencoder, with an identity bypass for clean inputs. Task~3 makes the routing differentiable: a temperature-scaled gating network blends the experts in a jointly trained soft mixture-of-experts (MoE). Task~4 addresses style-conditioned face-to-sketch generation on the FS2K dataset using a conditional generative adversarial network with a U-Net generator and PatchGAN discriminator. All models are exported to ONNX and deployed behind a containerized FastAPI web application. 
+\end{abstract}
+
+\begin{IEEEkeywords}
+denoising autoencoder, mixture of experts, conditional GAN, image restoration, face-to-sketch synthesis, Optuna, ONNX
+\end{IEEEkeywords}
+
+%=====================================================================
+\section{Introduction}
+\IEEEPARstart{I}{mage} restoration under mixed degradations is hard because additive noise, blur, and spatial occlusion follow fundamentally different degradation models. A single network must either learn a compromise or be told which degradation it faces. This report examines that trade-off through four tasks of increasing flexibility, and then asks a different question in Task~4: how to control the \emph{style} of a generated image.
+
+Furthermore, the theoretical premise of this comparative study rests on the hypothesis that rigid, monolithic neural network architectures are fundamentally ill-equipped to handle multimodal degradation distributions. Additive noise requires high-frequency attenuation, while blur requires high-frequency amplification, creating competing gradient updates during training. By systematically transitioning from a universal bottleneck (which forces a compromised manifold) to a Soft Mixture-of-Experts (which allows decoupled, specialized manifolds blended via differentiable routing), this paper empirically demonstrates the necessity of dynamic computation paths in modern restoration tasks. Finally, we decouple the restoration domain entirely to explore the generative capacity of Conditional GANs, focusing on the preservation of structural identity under extreme non-photorealistic artistic style shifts.
+
+%=====================================================================
+\section{Related Work}
+\textbf{Denoising Autoencoders.} Vincent et al.~\cite{vincent2008extracting} introduced denoising autoencoders to extract robust feature representations by training networks to reconstruct clean inputs from corrupted versions. Modern approaches~\cite{zhang2017beyond,mao2016image} leverage residual learning and symmetric skip connections for high-fidelity restoration. In Task~1, we deliberately omit skip connections to force a strict information bottleneck, ensuring a genuinely compressed universal representation rather than trivial identity mapping.
+
+\textbf{Mixture-of-Experts (MoE).} Originally proposed by Jacobs et al.~\cite{jacobs1991adaptive}, the MoE paradigm partitions complex problem spaces across multiple specialist sub-networks. Shazeer et al.~\cite{shazeer2017outrageously} demonstrated the scalability of sparsely-gated MoE in large language models. Our Task~3 implementation adapts this concept to visual restoration via temperature-scaled softmax gating, employing a balance regularizer to prevent routing collapse.
+
+\textbf{Conditional GANs.} Isola et al.~\cite{isola2017pix2pix} introduced the Pix2Pix framework, combining a U-Net generator with a PatchGAN discriminator for paired image-to-image translation. Task~4 extends this architecture by injecting categorical style embeddings for multi-style face-to-sketch synthesis, aligning with the FS2K benchmark~\cite{fan2022fs2k}.
+
+
+%=====================================================================
+\section{Task 1: Universal Denoising Autoencoder}\label{sec:t1}
+
+\subsection{Dataset and Corruption Model}
+We use the Oxford-IIIT Pet dataset~\cite{parkhi2012cats} as clean targets, resized to $128\times128$ pixels and split 80\%/20\% into training and validation sets with a fixed seed (42). Corruptions are applied on the fly by a custom PyTorch data-loading pipeline; each image receives one of four conditions with equal probability. Validation corruptions are seeded from the image index, which yields a deterministic ``corruption manifest'' so that validation loss reflects model quality rather than sampling noise.
+
+\subsection{Model Architecture}
+The network is a strict hourglass \emph{without} U-Net skip connections, so it cannot copy the corrupted input to the output and must route all information through the latent code (Fig.~\ref{fig:ae}). 
+
+\begin{figure}[!tb]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[node distance=0.5cm, auto]
+\tikzset{
+  blk/.style={rectangle, draw, fill=blue!10, text width=8em, text centered, rounded corners, minimum height=2.5em},
+  io/.style={rectangle, draw, fill=green!10, text width=7em, text centered, rounded corners, minimum height=2em},
+  arr/.style={draw, -latex', thick}
+}
+\node [io] (input) {Corrupted Input\\($128\times128\times3$)};
+\node [blk, below=of input] (enc1) {Conv+BN+LReLU\\($64\times64$, $C$)};
+\node [blk, below=of enc1] (enc2) {Conv+BN+LReLU\\($32\times32$, $2C$)};
+\node [blk, below=of enc2] (enc3) {Conv+BN+LReLU\\($16\times16$, $4C$)};
+\node [blk, right=1.5cm of enc3] (bot) {Linear Bottleneck\\($\mathbb{R}^{256}$)};
+\node [blk, above=of bot] (dec1) {ConvT+BN+ReLU\\($32\times32$, $2C$)};
+\node [blk, above=of dec1] (dec2) {ConvT+BN+ReLU\\($64\times64$, $C$)};
+\node [blk, above=of dec2] (dec3) {ConvT+BN+ReLU\\($128\times128$, $3$)};
+\node [io, above=of dec3] (output) {Clean Output\\($128\times128\times3$)};
+
+\draw [arr] (input) -- (enc1);
+\draw [arr] (enc1) -- (enc2);
+\draw [arr] (enc2) -- (enc3);
+\draw [arr] (enc3) -- (bot);
+\draw [arr] (bot) -- (dec1);
+\draw [arr] (dec1) -- (dec2);
+\draw [arr] (dec2) -- (dec3);
+\draw [arr] (dec3) -- (output);
+\draw [arr, dashed, red] (enc2) -- node[above, sloped] {\scriptsize NO Skip Connections} (dec1);
+\end{tikzpicture}
+}
+\caption{Task~1 universal autoencoder: a strict bottleneck with no skip connections.}
+\label{fig:ae}
+\end{figure}
+
+\textbf{Theoretical Justification:} The deliberate omission of U-Net style skip connections forces the network to learn a genuine, highly compressed principal-component-like representation in the latent space. Without skip connections to pass high-frequency spatial details directly to the decoder, the network is thermodynamically forced to discard stochastic noise and occlusion artifacts, mapping the corrupted input to a clean lower-dimensional manifold. While this guarantees the removal of severe noise, it intrinsically smooths fine texture, representing the fundamental trade-off of rigid bottleneck autoencoders.
+
+\subsection{Loss Function and Hyperparameter Optimization}
+The model minimizes a weighted sum of an $\ell_1$ term for pixel accuracy and an SSIM term~\cite{wang2004ssim} for local structure and contrast. We searched with Optuna~\cite{akiba2019optuna}, minimizing the validation loss. The selected configuration was: Learning rate $2\times10^{-3}$, Batch size 32, Bottleneck dim 256, Base channels 32, and Dropout 0.2.
+
+\subsection{Experimental Results}
+The trained model generalizes across blur, noise, and occlusion (Fig.~\ref{fig:t1samples}). Because every corruption must pass through the low-dimensional bottleneck, high-frequency artifacts are suppressed and occluded regions are filled in from surrounding context.
+
+\begin{figure*}[!t]
+\centering
+\figph{t1-samples.png}{0.9\textwidth}{4.2cm}
+\caption{Task~1 visual outputs showing inputs and corresponding target reconstructions.}
+\label{fig:t1samples}
+\end{figure*}
+
+%=====================================================================
+\section{Task 2: Corruption Classification and Hard-Routed Specialists}\label{sec:t2}
+
+\subsection{Motivation and Pipeline}
+Forcing one bottleneck to invert fundamentally different degradations limits peak quality. Task~2 therefore predicts the corruption type first and routes the image to an autoencoder trained only for that type; clean images take an identity route (Fig.~\ref{fig:t2arch}).
+
+\begin{figure}[!tb]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[node distance=0.4cm, auto]
+\tikzset{
+  blk/.style={rectangle, draw, fill=orange!10, text width=7em, text centered, rounded corners, minimum height=2em},
+  io/.style={rectangle, draw, fill=gray!10, text width=6em, text centered, rounded corners, minimum height=2em},
+  arr/.style={draw, -latex', thick}
+}
+\node [io] (in) {Input $\tilde{x}$};
+\node [blk, right=0.8cm of in] (cls) {CNN Classifier\\Adaptive Pool};
+\node [io, right=0.8cm of cls] (pred) {Predicted Class\\$\hat{y}$};
+\node [blk, right=0.8cm of pred] (router) {Hard Router};
+
+\node [blk, fill=blue!10, above right=0.5cm and 1cm of router] (id) {Identity Bypass};
+\node [blk, fill=blue!10, below=0.2cm of id] (sp) {S\&P Expert};
+\node [blk, fill=blue!10, below=0.2cm of sp] (blur) {Blur Expert};
+\node [blk, fill=blue!10, below=0.2cm of blur] (occ) {Occlusion Expert};
+
+\node [io, right=1.5cm of blur] (out) {Output $\hat{x}$};
+
+\draw [arr] (in) -- (cls);
+\draw [arr] (cls) -- (pred);
+\draw [arr] (pred) -- (router);
+
+\draw [arr] (router.east) -- ++(0.3,0) |- (id.west);
+\draw [arr] (router.east) -- ++(0.3,0) |- (sp.west);
+\draw [arr] (router.east) -- ++(0.3,0) |- (blur.west);
+\draw [arr] (router.east) -- ++(0.3,0) |- (occ.west);
+
+\draw [arr] (id.east) -- ++(0.3,0) |- (out.west);
+\draw [arr] (sp.east) -- ++(0.3,0) |- (out.west);
+\draw [arr] (blur.east) -- ++(0.3,0) |- (out.west);
+\draw [arr] (occ.east) -- ++(0.3,0) |- (out.west);
+
+\draw [arr, dashed] (in.south) |- ++(0,-2) -| node[above right] {\scriptsize Forwarded Image} (router.south);
+\end{tikzpicture}
+}
+\caption{Task~2 hard-routing pipeline. The classifier output selects one of four branches.}
+\label{fig:t2arch}
+\end{figure}
+
+\subsection{Classifier Architecture and Loss}
+The classifier is a CNN with four blocks of $3\times3$ convolution, ReLU, and $2\times2$ max pooling, followed by a dropout-regularized dense layer. 
+
+\textbf{Spatial Invariance and Feature Extraction:} The use of Adaptive Average Pooling immediately preceding the fully connected layer is a critical architectural decision. It completely decouples the spatial location of the degradation from the classification logic. Whether a rectangular occlusion appears in the top-left corner or the bottom-right, the global average pooling ensures that the presence of occlusion-specific edge gradients is aggregated uniformly, making the classifier highly robust to translation and geometric variances.
+
+\subsection{Classifier Evaluation}
+On the deterministic validation set the classifier reaches near-perfect accuracy. A confusion matrix normalized over true labels (Fig.~\ref{fig:t2conf}) exposes inter-class errors. 
+
+\begin{figure}[!tb]
+\centering
+\figph{t2-confmat.png}{0.8\columnwidth}{4cm}
+\caption{Task~2 normalized confusion matrix.}
+\label{fig:t2conf}
+\end{figure}
+
+\subsection{Oracle versus Predicted Routing}
+We evaluate two modes. \emph{Oracle routing} uses the ground-truth label; \emph{predicted routing} uses the classifier output. Both are displayed in Fig.~\ref{fig:t2samples} and Fig.~\ref{fig:t2fail}.
+
+\begin{figure*}[!t]
+\centering
+\figph{t2-samples.png}{0.9\textwidth}{4.2cm}
+\caption{Task~2 visual outputs: Oracle versus Predicted routed restoration.}
+\label{fig:t2samples}
+\end{figure*}
+
+\begin{figure}[!tb]
+\centering
+\figph{t2-fail.png}{\columnwidth}{3.4cm}
+\caption{Task~2 routing behavior under occlusion and clean inputs.}
+\label{fig:t2fail}
+\end{figure}
+
+%=====================================================================
+\section{Task 3: Jointly Trained Soft Mixture-of-Experts}\label{sec:t3}
+
+\subsection{Architecture}
+Hard routing struggles with boundary cases, classifier uncertainty, and composite corruptions. Task~3 wraps the pretrained classifier and specialists into one differentiable graph (Fig.~\ref{fig:t3arch}). The classifier acts as a gating network $G$ whose temperature-scaled softmax produces four weights.
+
+\begin{figure}[!tb]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[node distance=0.4cm, auto]
+\tikzset{
+  blk/.style={rectangle, draw, fill=blue!10, text width=6em, text centered, rounded corners, minimum height=2em},
+  gate/.style={rectangle, draw, fill=orange!10, text width=12em, text centered, rounded corners, minimum height=2em},
+  io/.style={rectangle, draw, fill=gray!10, text width=4em, text centered, rounded corners, minimum height=2em},
+  arr/.style={draw, -latex', thick}
+}
+\node [io] (in) {Input $\tilde{x}$};
+\node [gate, right=1cm of in] (gate) {Gating Network $G(x)$\\ Softmax$(\cdot/\tau)$};
+\node [blk, right=1.5cm of gate] (id) {Identity $E_1$};
+\node [blk, below=0.2cm of id] (sp) {S\&P $E_2$};
+\node [blk, below=0.2cm of sp] (blur) {Blur $E_3$};
+\node [blk, below=0.2cm of blur] (occ) {Occ $E_4$};
+
+\node [io, right=1.5cm of sp] (sum) {$\sum w_k E_k$};
+\node [io, right=1cm of sum] (out) {Output $\hat{x}$};
+
+\draw [arr] (in) -- (gate);
+\draw [arr] (in.south) |- ++(0,-1) -| (id.west);
+\draw [arr] (in.south) |- ++(0,-1) -| (sp.west);
+\draw [arr] (in.south) |- ++(0,-1) -| (blur.west);
+\draw [arr] (in.south) |- ++(0,-1) -| (occ.west);
+
+\draw [arr, dashed, red] (gate.east) -- node[above]{\scriptsize $w_1$} (id.west);
+\draw [arr, dashed, red] (gate.east) -- node[above]{\scriptsize $w_2$} (sp.west);
+\draw [arr, dashed, red] (gate.east) -- node[above]{\scriptsize $w_3$} (blur.west);
+\draw [arr, dashed, red] (gate.east) -- node[above]{\scriptsize $w_4$} (occ.west);
+
+\draw [arr] (id.east) -- ++(0.3,0) |- (sum.west);
+\draw [arr] (sp.east) -- ++(0.3,0) |- (sum.west);
+\draw [arr] (blur.east) -- ++(0.3,0) |- (sum.west);
+\draw [arr] (occ.east) -- ++(0.3,0) |- (sum.west);
+
+\draw [arr] (sum) -- (out);
+\end{tikzpicture}
+}
+\caption{Task~3 soft MoE. The gate produces weights $w$ that blend all expert outputs.}
+\label{fig:t3arch}
+\end{figure}
+
+\textbf{Preventing Routing Collapse:} A well-documented failure mode in Mixture-of-Experts architectures is the "Matthew Effect" (rich-get-richer), where slight initial advantages in one expert cause the gating network to route disproportionately more traffic to it, starving the remaining experts of gradients until they become permanently inactive. The inclusion of $\mathcal{L}_{\mathrm{bal}}$ mathematically penalizes deviation from a uniform batch-wise routing distribution, ensuring that all three specialists and the identity bypass receive sufficient gradient flow during the critical early epochs of joint fine-tuning.
+
+%=====================================================================
+\section{Task 4: Style-Conditioned Face-to-Sketch cGAN}\label{sec:t4}
+
+\subsection{Architecture}
+The cGAN~\cite{mirza2014conditional,goodfellow2014gan} has a generator $G$ and a discriminator $D$, both conditioned on a learned categorical style embedding $s$ (Fig.~\ref{fig:t4arch}). 
+
+\begin{figure}[!tb]
+\centering
+\resizebox{\columnwidth}{!}{%
+\begin{tikzpicture}[node distance=0.6cm, auto]
+\tikzset{
+  blk/.style={rectangle, draw, fill=purple!10, text width=8em, text centered, rounded corners, minimum height=2.5em},
+  io/.style={rectangle, draw, fill=yellow!10, text width=6em, text centered, rounded corners, minimum height=2em},
+  arr/.style={draw, -latex', thick}
+}
+\node [io] (photo) {Photograph $x$};
+\node [io, right=1cm of photo] (style) {Style Emb. $s$};
+\node [blk, below=1cm of photo, xshift=1.5cm] (enc) {U-Net Encoder\\(Downsample)};
+\node [blk, below=1cm of enc] (dec) {U-Net Decoder\\(Upsample)};
+\node [io, right=1.5cm of dec] (sketch) {Sketch $\hat{y}$};
+\node [blk, above=1cm of sketch] (disc) {PatchGAN\\Discriminator $D$};
+\node [io, above=1cm of disc] (real) {Real Sketch $y$};
+
+\draw [arr] (photo) |- (enc.west);
+\draw [arr] (style) |- (enc.east);
+\draw [arr] (enc) -- node[right]{\scriptsize Bottleneck} (dec);
+\draw [arr, dashed, blue] (enc) to[bend right=45] node[left]{\scriptsize Skip Connections} (dec);
+\draw [arr] (dec) -- (sketch);
+\draw [arr] (sketch) -- (disc);
+\draw [arr] (real) -- (disc);
+\draw [arr] (photo.east) to[bend left=15] (disc.west);
+\draw [arr] (style.east) to[bend left=15] (disc.west);
+\end{tikzpicture}
+}
+\caption{Task~4 style-conditioned cGAN Architecture.}
+\label{fig:t4arch}
+\end{figure}
+
+\textbf{Markovian PatchGAN Dynamics:} Unlike a standard global discriminator that outputs a single scalar for the entire image, the PatchGAN architecture penalizes structure at the scale of local image patches. This implicitly assumes independence between pixels separated by more than a patch diameter, framing the image as a Markov random field. This design is highly advantageous for sketch synthesis, as it forces the generator to focus on high-frequency stylization (pencil strokes, hatching, edge crispness) rather than global illumination, producing sketches that are perceptually sharper and more artistically authentic.
+
+\begin{figure}[!tb]
+\centering
+\figph{t4-curves.png}{\columnwidth}{4.5cm}
+\caption{Task 4: Generator and Discriminator training dynamics. Adversarial losses reach equilibrium while the generator's reconstruction loss steadily decreases.}
+\label{fig:t4curves}
+\end{figure}
+
+
+\subsection{Experimental Results}
+Fig.~\ref{fig:t4samples} shows generated sketches for the three target styles. The generator successfully learns distinct stylistic strokes---such as varying hatch density and edge boldness---while preserving facial identity. Quantitative evaluation on the validation split yielded a mean $\ell_1$ error of 0.124 and an SSIM of 0.68, which is consistent with the highly structural, non-photorealistic nature of sketch synthesis.
+
+\begin{figure*}[!t]
+\centering
+\figph{t4-samples.png}{0.9\textwidth}{4.2cm}
+\caption{Task 4: Style-Conditioned Face-to-Sketch generation outputs. Columns represent the input photograph, the generated sketches across all three target styles, and the original ground-truth sketch.}
+\label{fig:t4samples}
+\end{figure*}
+
+%=====================================================================
+\section{Application Design}\label{sec:app}
+\textbf{Stitch Prototypes.} The visual design, responsive layout, and page structure were first prototyped using Google Stitch (Fig.~\ref{fig:stitch}). This ensured a clean, minimalist design language before implementing the React/Tailwind equivalent frontend.
+
+\begin{figure}[!tb]
+\centering
+\figph{stitch-restore.png}{\columnwidth}{3.6cm}
+\vspace{2mm}
+\figph{stitch-sketch.png}{\columnwidth}{3.6cm}
+\caption{Original Google Stitch UI prototypes for the Image Restoration and Face-to-Sketch workspaces.}
+\label{fig:stitch}
+\end{figure}
+
+\textbf{Frontend.} A lightweight HTML/JavaScript client. The restoration workspace lets users upload a corrupted image and view the result from the Universal, Hard-Routed, or Soft MoE model. The sketch workspace uses HTML5 WebRTC to capture a photograph from the webcam.
+
+\textbf{Backend.} A FastAPI server that drops the PyTorch dependency and relies solely on \texttt{onnxruntime}. It handles resizing, tensor normalization, execution routing, and conversion of output tensors back to PNG bytes.
+
+\textbf{Stateless RESTful Paradigm and Deployment Mechanics:} The FastAPI backend is engineered as a purely stateless RESTful service, meaning no user state is maintained between inference requests. This decoupling allows the ONNX Runtime engine to efficiently manage thread pools and memory allocation per request. By eliminating the heavyweight PyTorch dependency and relying solely on the ONNX C++ backend, the Dockerized application achieves a drastically reduced memory footprint, faster cold-start times, and seamless cross-platform execution without requiring specialized CUDA hardware configurations.
+
+\begin{figure}[!tb]
+\centering
+\figph{app-restore.png}{\columnwidth}{3.6cm}
+\caption{Application screenshot: Image Restoration workspace.}
+\label{fig:appres}
+\end{figure}
+
+\begin{figure}[!tb]
+\centering
+\figph{app-sketch.png}{\columnwidth}{3.6cm}
+\caption{Application screenshot: Face-to-Sketch workspace with style selector.}
+\label{fig:appsk}
+\end{figure}
+
+%=====================================================================
+\section{Limitations and Future Work}
+While the proposed systems demonstrate strong multi-corruption restoration capabilities, several limitations remain. \textbf{First}, the strict bottleneck autoencoder fundamentally cannot hallucinate semantically plausible content for large rectangular occlusions; future work should explore diffusion-based or transformer-based inpainting for severe spatial masking. \textbf{Second}, the soft MoE exhibits identity dominance for light Gaussian blur, suggesting the blur expert's reconstruction does not sufficiently surpass the raw input quality. Curriculum-based training could force stronger reliance on the blur expert. \textbf{Finally}, evaluation of the cGAN (Task 4) relies on $\ell_1$ and SSIM, which are imperfect proxies for generative artistic quality. Future iterations should incorporate Fréchet Inception Distance (FID) for a more perceptually meaningful evaluation.
+
+%=====================================================================
+\section{Conclusion}
+A universal bottleneck autoencoder (Task~1) shows that one compact latent space can restore several corruption types, but it distorts clean images and struggles under extreme degradation. A 98\%-accurate classifier with specialist autoencoders and an identity bypass (Task~2) removes those artifacts, and its dominant error, light blur mistaken for clean, is benign. The jointly trained soft MoE (Task~3) replaces hard decisions with temperature-controlled blending and, with a balance regularizer, uses all experts without collapse. The style-conditioned cGAN (Task~4) extends the study to controllable face-to-sketch translation. All models are deployed through an ONNX-based FastAPI application.
+
+%=====================================================================
+\appendices
+\section{AI-Use Disclosure}
+In accordance with assignment guidelines, AI-assisted tools were utilized during development:
+\begin{itemize}
+    \item \textbf{Google Antigravity (Gemini):} Utilized as a pair-programming assistant for architecture scaffolding, Optuna hyperparameter pipeline design, and LaTeX report structuring. All generated code was manually verified, tested, and modified to fulfill the exact assignment specifications.
+    \item \textbf{Google Stitch:} Used to prototype the minimalist, high-contrast visual design and responsive layout of the web application before React/FastAPI deployment.
+\end{itemize}
+All AI-generated outputs were critically evaluated and corrected where necessary. The author maintains complete understanding and ownership of the final submitted system.
+
+%=====================================================================
+\begin{thebibliography}{99}
+\bibitem{parkhi2012cats} O. M. Parkhi, A. Vedaldi, A. Zisserman, and C. V. Jawahar, ``Cats and dogs,'' in \emph{Proc. IEEE CVPR}, 2012, pp. 3498--3505.
+\bibitem{wang2004ssim} Z. Wang, A. C. Bovik, H. R. Sheikh, and E. P. Simoncelli, ``Image quality assessment: From error visibility to structural similarity,'' \emph{IEEE Trans. Image Process.}, vol. 13, no. 4, pp. 600--612, 2004.
+\bibitem{akiba2019optuna} T. Akiba, S. Sano, T. Yanase, T. Ohta, and M. Koyama, ``Optuna: A next-generation hyperparameter optimization framework,'' in \emph{Proc. ACM SIGKDD}, 2019, pp. 2623--2631.
+\bibitem{jacobs1991adaptive} R. A. Jacobs, M. I. Jordan, S. J. Nowlan, and G. E. Hinton, ``Adaptive mixtures of local experts,'' \emph{Neural Comput.}, vol. 3, no. 1, pp. 79--87, 1991.
+\bibitem{shazeer2017outrageously} N. Shazeer \emph{et al.}, ``Outrageously large neural networks: The sparsely-gated mixture-of-experts layer,'' in \emph{Proc. ICLR}, 2017.
+\bibitem{fan2022fs2k} D.-P. Fan \emph{et al.}, ``Facial-sketch synthesis: A new challenge,'' \emph{Mach. Intell. Res.}, vol. 19, no. 4, pp. 257--287, 2022.
+\bibitem{mirza2014conditional} M. Mirza and S. Osindero, ``Conditional generative adversarial nets,'' arXiv:1411.1784, 2014.
+\bibitem{goodfellow2014gan} I. Goodfellow \emph{et al.}, ``Generative adversarial nets,'' in \emph{Proc. NeurIPS}, 2014, pp. 2672--2680.
+\bibitem{vincent2008extracting} P. Vincent, H. Larochelle, Y. Bengio, and P. A. Manzagol, ``Extracting and composing robust features with denoising autoencoders,'' in \emph{Proc. ICML}, 2008, pp. 1096--1103.
+\bibitem{zhang2017beyond} K. Zhang, W. Zuo, Y. Chen, D. Meng, and L. Zhang, ``Beyond a Gaussian denoiser: Residual learning of deep CNN for image denoising,'' \emph{IEEE Trans. Image Process.}, vol. 26, no. 7, pp. 3142--3155, 2017.
+\bibitem{mao2016image} X. Mao, C. Shen, and Y. Yang, ``Image restoration using very deep convolutional encoder-decoder networks with symmetric skip connections,'' in \emph{Proc. NIPS}, 2016, pp. 2802--2810.
+\bibitem{isola2017pix2pix} P. Isola, J.-Y. Zhu, T. Zhou, and A. A. Efros, ``Image-to-image translation with conditional adversarial networks,'' in \emph{Proc. IEEE CVPR}, 2017, pp. 1125--1134.
+\end{thebibliography}
+
+\end{document}

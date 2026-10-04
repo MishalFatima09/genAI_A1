@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generative AI Workspace</title>
+    <style>
+        :root {
+            --bg-color: #f9fafb;
+            --card-bg: #ffffff;
+            --border-color: #e5e7eb;
+            --text-main: #111827;
+            --text-muted: #6b7280;
+            --primary: #000000;
+            --primary-hover: #374151;
+            --accent: #2563eb;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 60px 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .header {
+            text-align: center;
+            max-width: 800px;
+            margin-bottom: 40px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin: 0 0 8px 0;
+            letter-spacing: -0.025em;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 1.05rem;
+            margin: 0;
+        }
+
+        /* Clean Underline Tabs */
+        .tabs {
+            display: flex;
+            gap: 30px;
+            border-bottom: 1px solid var(--border-color);
+            margin-bottom: 40px;
+            width: 100%;
+            max-width: 900px;
+            justify-content: center;
+        }
+
+        .tab {
+            padding: 10px 4px;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s ease;
+            margin-bottom: -1px;
+        }
+
+        .tab:hover {
+            color: var(--text-main);
+        }
+
+        .tab.active {
+            color: var(--text-main);
+            border-bottom: 2px solid var(--text-main);
+        }
+
+        .workspace {
+            display: none;
+            width: 100%;
+            max-width: 900px;
+        }
+
+        .workspace.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Professional Controls */
+        .controls {
+            background: var(--card-bg);
+            padding: 24px;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 30px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+
+        .controls form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .controls-row {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 15px;
+        }
+
+        select, input[type="file"] {
+            padding: 8px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 14px;
+            background: white;
+            color: var(--text-main);
+            outline: none;
+            transition: border-color 0.2s;
+            flex: 1;
+        }
+
+        select:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+
+        button {
+            background-color: var(--primary);
+            color: white;
+            border: 1px solid var(--primary);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: var(--primary-hover);
+            border-color: var(--primary-hover);
+        }
+
+        .btn-secondary {
+            background-color: white;
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-secondary:hover {
+            background-color: #f3f4f6;
+            border-color: #d1d5db;
+        }
+
+        /* Clean Image Containers */
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        .img-box {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            min-height: 350px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+        }
+
+        .img-box h3 {
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin: 0 0 16px 0;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 12px;
+        }
+
+        .image-placeholder {
+            flex-grow: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg-color);
+            border-radius: 6px;
+            color: #9ca3af;
+            font-size: 14px;
+        }
+
+        img {
+            width: 100%;
+            height: auto;
+            border-radius: 6px;
+        }
+
+        video {
+            width: 100%;
+            border-radius: 6px;
+            background: #000;
+        }
+
+        .loader {
+            border: 2px solid var(--border-color);
+            border-top: 2px solid var(--text-main);
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            animation: spin 0.8s linear infinite;
+            display: none;
+            margin: auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        #downloadSketch { text-decoration: none; display: block; margin-top: 16px; }
+        #downloadSketch button { width: 100%; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Generative AI Workspace</h1>
+        <p class="subtitle">Image Restoration & Style-Conditioned Synthesis</p>
+    </div>
+    
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('ws-restore', event)">Image Restoration (Tasks 1-3)</div>
+        <div class="tab" onclick="switchTab('ws-sketch', event)">Face-to-Sketch (Task 4)</div>
+    </div>
+
+    <!-- Workspace 1: Restoration -->
+    <div id="ws-restore" class="workspace active">
+        <div class="controls">
+            <form id="uploadForm">
+                <input type="file" id="imageInput" accept="image/*" required>
+                <select id="modelSelect">
+                    <option value="universal">Task 1: Universal Autoencoder</option>
+                    <option value="hard">Task 2: Hard-Routed Specialists</option>
+                    <option value="soft">Task 3: Soft Mixture-of-Experts</option>
+                </select>
+                <button type="submit">Restore Image</button>
+            </form>
+        </div>
+        <div class="container">
+            <div class="img-box">
+                <h3>Corrupted Input</h3>
+                <div class="image-placeholder" id="ph1">No image selected</div>
+                <img id="origImg" src="" style="display:none;">
+            </div>
+            <div class="img-box">
+                <h3>Restoration Output</h3>
+                <div class="image-placeholder" id="ph2">Awaiting processing</div>
+                <div class="loader" id="loader1"></div>
+                <img id="restoredImg" src="" style="display:none;">
+            </div>
+        </div>
+    </div>
+
+    <!-- Workspace 2: Face to Sketch -->
+    <div id="ws-sketch" class="workspace">
+        <div class="controls" style="flex-direction: column; align-items: stretch;">
+            <div class="controls-row">
+                <button type="button" class="btn-secondary" onclick="startWebcam()">Enable Webcam</button>
+                <button type="button" id="snapBtn" style="display:none;" onclick="snapPhoto()">Capture Frame</button>
+            </div>
+            
+            <video id="video" autoplay style="display:none;"></video>
+            <canvas id="canvas" style="display:none;"></canvas>
+            
+            <form id="sketchForm">
+                <input type="file" id="faceInput" accept="image/*">
+                <select id="styleSelect">
+                    <option value="0">Sketch Style 1</option>
+                    <option value="1">Sketch Style 2</option>
+                    <option value="2">Sketch Style 3</option>
+                </select>
+                <button type="submit">Generate Synthesis</button>
+            </form>
+        </div>
+        <div class="container">
+            <div class="img-box">
+                <h3>Source Photograph</h3>
+                <div class="image-placeholder" id="ph3">No image selected</div>
+                <img id="origFace" src="" style="display:none;">
+            </div>
+            <div class="img-box">
+                <h3>Generated Sketch</h3>
+                <div class="image-placeholder" id="ph4">Awaiting processing</div>
+                <div class="loader" id="loader2"></div>
+                <img id="genSketch" src="" style="display:none;">
+                <a id="downloadSketch" href="#" download="synthesized_sketch.png" style="display:none;">
+                    <button type="button" class="btn-secondary">Download Image</button>
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tabId, event) {
+            document.querySelectorAll('.workspace').forEach(w => w.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        // --- RESTORATION LOGIC ---
+        document.getElementById('uploadForm').onsubmit = async (e) => {
+            e.preventDefault();
+            const file = document.getElementById('imageInput').files[0];
+            const model = document.getElementById('modelSelect').value;
+            
+            document.getElementById('ph1').style.display = "none";
+            document.getElementById('origImg').src = URL.createObjectURL(file);
+            document.getElementById('origImg').style.display = "block";
+            
+            document.getElementById('restoredImg').style.display = "none";
+            document.getElementById('ph2').style.display = "none";
+            document.getElementById('loader1').style.display = "block";
+
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('model_type', model);
+            
+            const response = await fetch('/predict', { method: 'POST', body: formData });
+            const blob = await response.blob();
+            
+            document.getElementById('loader1').style.display = "none";
+            document.getElementById('restoredImg').src = URL.createObjectURL(blob);
+            document.getElementById('restoredImg').style.display = "block";
+        };
+
+        // --- SKETCH LOGIC ---
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        let currentFaceBlob = null;
+
+        async function startWebcam() {
+            video.style.display = "block";
+            document.getElementById('snapBtn').style.display = "block";
+            document.getElementById('faceInput').value = ""; 
+            currentFaceBlob = null;
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            video.srcObject = stream;
+        }
+
+        function snapPhoto() {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            canvas.getContext('2d').drawImage(video, 0, 0);
+            canvas.toBlob(blob => {
+                currentFaceBlob = blob;
+                document.getElementById('ph3').style.display = "none";
+                document.getElementById('origFace').src = URL.createObjectURL(blob);
+                document.getElementById('origFace').style.display = "block";
+                
+                const stream = video.srcObject;
+                const tracks = stream.getTracks();
+                tracks.forEach(track => track.stop());
+                video.style.display = "none";
+                document.getElementById('snapBtn').style.display = "none";
+            }, 'image/jpeg');
+        }
+        
+        document.getElementById('faceInput').onchange = (e) => {
+            if (e.target.files.length > 0) {
+                currentFaceBlob = e.target.files[0];
+                document.getElementById('ph3').style.display = "none";
+                document.getElementById('origFace').src = URL.createObjectURL(currentFaceBlob);
+                document.getElementById('origFace').style.display = "block";
+                
+                if(video.srcObject) {
+                    video.srcObject.getTracks().forEach(track => track.stop());
+                    video.style.display = "none";
+                    document.getElementById('snapBtn').style.display = "none";
+                }
+            }
+        };
+
+        document.getElementById('sketchForm').onsubmit = async (e) => {
+            e.preventDefault();
+            if (!currentFaceBlob) { alert("Please upload an image or capture a frame."); return; }
+            
+            document.getElementById('genSketch').style.display = "none";
+            document.getElementById('downloadSketch').style.display = "none";
+            document.getElementById('ph4').style.display = "none";
+            document.getElementById('loader2').style.display = "block";
+
+            const style = document.getElementById('styleSelect').value;
+            const formData = new FormData();
+            formData.append('file', currentFaceBlob, "photo.jpg");
+            formData.append('style', style);
+            
+            const response = await fetch('/predict_sketch', { method: 'POST', body: formData });
+            const blob = await response.blob();
+            
+            const url = URL.createObjectURL(blob);
+            document.getElementById('loader2').style.display = "none";
+            document.getElementById('genSketch').src = url;
+            document.getElementById('genSketch').style.display = "block";
+            
+            const dlBtn = document.getElementById('downloadSketch');
+            dlBtn.href = url;
+            dlBtn.style.display = "block";
+        };
+    </script>
+</body>
+</html>
